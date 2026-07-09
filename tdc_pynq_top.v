@@ -2,6 +2,14 @@
 // Single-Chain Tapped Delay Line (TDL) TDC for PYNQ-Z2 (xc7z020)
 // Target resolution: 1-2 ns (CARRY4 native tap ~20-90ps, so we
 // have generous margin -- design is intentionally oversampled).
+//
+// NUM_TAPS = 256 so the chain's total span (256 * ~20-90ps =
+// roughly 5-23ns depending on real silicon delay) covers at
+// least one full clk period (e.g. 10ns @ 100MHz). Fewer taps
+// would leave a "blind" region late in each clock period where
+// the pulse runs off the end of the chain and the fine code
+// saturates at NUM_TAPS, silently losing resolution for edges
+// landing there. Adjust NUM_TAPS if you change clk frequency.
 // =============================================================
 
 // -------------------------------------------------------------
@@ -12,7 +20,7 @@
 //    before the clock arrived.
 // -------------------------------------------------------------
 module tdl_chain #(
-    parameter NUM_TAPS = 64   // must be multiple of 4
+    parameter NUM_TAPS = 256   // must be multiple of 4; covers ~10ns clock period at ~40ps/tap
 )(
     input  wire                  clk,
     input  wire                  start,
@@ -61,8 +69,8 @@ endmodule
 //    unlike a plain priority encoder.
 // -------------------------------------------------------------
 module thermo_encoder #(
-    parameter NUM_TAPS  = 64,
-    parameter OUT_WIDTH = 7      // ceil(log2(NUM_TAPS+1))
+    parameter NUM_TAPS  = 256,
+    parameter OUT_WIDTH = 9      // ceil(log2(NUM_TAPS+1))
 )(
     input  wire [NUM_TAPS-1:0]   thermo_code,
     output reg  [OUT_WIDTH-1:0]  fine_code
@@ -124,8 +132,8 @@ endmodule
 //    as memory-mapped registers for PYNQ.
 // -------------------------------------------------------------
 module tdc_top #(
-    parameter NUM_TAPS   = 64,
-    parameter OUT_WIDTH  = 7,
+    parameter NUM_TAPS   = 256,
+    parameter OUT_WIDTH  = 9,
     parameter CNT_WIDTH  = 16
 )(
     input  wire                     clk,
