@@ -67,8 +67,8 @@ module fine_capture #(
 )(
     input  wire                  clk,
     input  wire                  rst,
-    input  wire                  trigger,
-    output reg  [OUT_WIDTH-1:0]  fine_code_held,
+    input  wire                  trigger,             // start or stop signal
+    output reg  [OUT_WIDTH-1:0]  fine_code_held,      
     output reg                   captured,
     output wire                  trigger_sync
 );
@@ -84,7 +84,7 @@ module fine_capture #(
     reg sync_p1, sync_p2, sync_p3;
     
     always @(posedge clk) begin
-        thermo_p1 <= thermo_live; 
+        thermo_p1 <= thermo_live;                                                   // thermo _p1 is the synchronizer for metastablility caused in thermo_live
         
         // Tap 0 CDC Trick
         sync_p1 <= thermo_live[0]; 
@@ -94,7 +94,7 @@ module fine_capture #(
 
     wire [OUT_WIDTH-1:0] fine_encoded;
     thermo_encoder #(.NUM_TAPS(NUM_TAPS), .OUT_WIDTH(OUT_WIDTH)) u_enc (
-        .thermo_code(thermo_p1), .fine_code(fine_encoded)
+        .thermo_code(thermo_p1), .fine_code(fine_encoded)                           // thermo_p1 (metastabled one) is passed through the thermo_encoder
     );
 
     wire capture_pulse = sync_p2 & ~sync_p3;
