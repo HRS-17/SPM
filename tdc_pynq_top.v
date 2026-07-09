@@ -120,6 +120,80 @@ endmodule
 
 
 // -------------------------------------------------------------
+// 3b. Fine capture: wraps tdl_chain + thermo_encoder and adds
+//     "capture once, then hold" behavior.
+//
+//     Without this, the tap flip-flops keep re-sampling every
+//     single clock cycle -- if the trigger (start_in/stop_in)
+//     stays high for multiple clocks (as it will, since it's
+//     driven from a software-written AXI register), every clock
+//     edge after the pulse fully saturates the chain reads all-1s,
+//     and once the trigger drops low again the chain reverts to
+//     all-0s. Whatever meaningful code appeared on the very first
+//     clock edge gets overwritten by the next edge before software
+//     ever gets a chance to read it.
+//
+//     Fix: a 2-flip-flop edge detector finds the exact one clock
+//     cycle where trigger just transitioned low->high, and a
+//     separate hold register captures the fine code only during
+//     that cycle, then freezes (ignores further updates) until
+//     "rst" re-arms it for the next measurement.
+// -------------------------------------------------------------
+module fine_capture #(
+    parameter NUM_TAPS  = 256,
+    parameter OUT_WIDTH = 9
+)(
+    input  wire                  clk,
+    input  wire                  rst,       // re-arm for next measurement
+    input  wire                  trigger,   // start_in or stop_in
+    output wire [OUT_WIDTH-1:0]  fine_code_held,
+    output wire                  captured
+);
+
+    wire [NUM_TAPS-1:0]  thermo_code;
+    wire [OUT_WIDTH-1:0] fine_code_live;
+
+    tdl_chain #(.NUM_TAPS(NUM_TAPS)) u_tdl (
+        .clk(clk), .start(trigger), .thermo_code(thermo_code)
+    );
+
+    thermo_encoder #(.NUM_TAPS(NUM_TAPS), .OUT_WIDTH(OUT_WIDTH)) u_enc (
+        .thermo_code(thermo_code), .fine_code(fine_code_live)
+    );
+
+    // 2-stage edge detector on the raw trigger
+    reg trig_d1, trig_d2;
+    always @(posedge clk or posedge rst) begin
+        if (rst) begin
+            trig_d1 <= 1'b0;
+            trig_d2 <= 1'b0;
+        end else begin
+            trig_d1 <= trigger;
+            trig_d2 <= trig_d1;
+        end
+    end
+    wire capture_pulse = trig_d1 & ~trig_d2;  // high for exactly 1 cycle
+
+    // Hold register: updates only during capture_pulse, then freezes
+    reg [OUT_WIDTH-1:0] fine_code_reg;
+    reg                 captured_reg;
+    always @(posedge clk or posedge rst) begin
+        if (rst) begin
+            fine_code_reg <= {OUT_WIDTH{1'b0}};
+            captured_reg  <= 1'b0;
+        end else if (capture_pulse && !captured_reg) begin
+            fine_code_reg <= fine_code_live;
+            captured_reg  <= 1'b1;
+        end
+    end
+
+    assign fine_code_held = fine_code_reg;
+    assign captured       = captured_reg;
+
+endmodule
+
+
+// -------------------------------------------------------------
 // 4. Top-level TDC datapath.
 //    Two TDL chains (start-fine, stop-fine) let you resolve the
 //    sub-clock-period offset of BOTH edges; software combines
@@ -146,23 +220,16 @@ module tdc_top #(
     output wire                     meas_done
 );
 
-    wire [NUM_TAPS-1:0] thermo_start;
-    wire [NUM_TAPS-1:0] thermo_stop;
+    wire start_captured, stop_captured;
 
-    tdl_chain #(.NUM_TAPS(NUM_TAPS)) u_tdl_start (
-        .clk(clk), .start(start_in), .thermo_code(thermo_start)
+    fine_capture #(.NUM_TAPS(NUM_TAPS), .OUT_WIDTH(OUT_WIDTH)) u_fine_start (
+        .clk(clk), .rst(rst), .trigger(start_in),
+        .fine_code_held(fine_start_code), .captured(start_captured)
     );
 
-    tdl_chain #(.NUM_TAPS(NUM_TAPS)) u_tdl_stop (
-        .clk(clk), .start(stop_in), .thermo_code(thermo_stop)
-    );
-
-    thermo_encoder #(.NUM_TAPS(NUM_TAPS), .OUT_WIDTH(OUT_WIDTH)) u_enc_start (
-        .thermo_code(thermo_start), .fine_code(fine_start_code)
-    );
-
-    thermo_encoder #(.NUM_TAPS(NUM_TAPS), .OUT_WIDTH(OUT_WIDTH)) u_enc_stop (
-        .thermo_code(thermo_stop), .fine_code(fine_stop_code)
+    fine_capture #(.NUM_TAPS(NUM_TAPS), .OUT_WIDTH(OUT_WIDTH)) u_fine_stop (
+        .clk(clk), .rst(rst), .trigger(stop_in),
+        .fine_code_held(fine_stop_code), .captured(stop_captured)
     );
 
     coarse_counter #(.WIDTH(CNT_WIDTH)) u_coarse (
